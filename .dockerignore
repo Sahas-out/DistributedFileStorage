@@ -1,0 +1,7 @@
+# Build context is the repo root; keep it small.
+.git
+.vscode
+docs
+**/*.test
+**/*.out
+*.exe

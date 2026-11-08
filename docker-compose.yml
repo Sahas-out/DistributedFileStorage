@@ -1,0 +1,19 @@
+services:
+  worker1:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: dos-worker:latest
+    container_name: worker1
+    environment:
+      WORKER_ID: worker1
+      PORT: "8080"
+      DATA_DIR: /data
+    ports:
+      - "8081:8080"
+    volumes:
+      - worker1-data:/data
+    restart: unless-stopped
+
+volumes:
+  worker1-data:
