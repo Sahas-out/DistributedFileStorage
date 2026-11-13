@@ -1,0 +1,49 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as TCP Socket Buffer<br/>(kernel recv / send buffers)
+    participant CT as Controller
+    participant W1 as Worker 1<br/>(primary replica)
+    participant V1 as Volume 1
+    participant W2 as Worker 2<br/>(secondary replica)
+    participant V2 as Volume 2
+
+    C->>S: HTTP GET /objects/:id
+    CT->>S: async non-blocking read (network I/O)
+    S-->>CT: HTTP request line + headers (object_id)
+    Note over CT: Look up chunk metadata DB once:<br/>object metadata, ordered chunk list (seq_no, chunk_id),<br/>replica locations, per-chunk checksums
+    CT->>S: write response headers: 200 OK, Content-Length, ETag
+    S-->>C: HTTP response headers
+
+    loop for each chunk in seq_no order
+        CT-)W1: async HTTP GET /chunks (network I/O)<br/>object_id, seq_no, chunk_id
+        activate W1
+        W1-)V1: async read (disk I/O): chunk_id at offset, length
+        V1--)W1: chunk data
+        W1--)CT: chunk data
+        deactivate W1
+        Note over CT: Compute checksum of the received chunk (e.g. CRC32C)<br/>and compare with the checksum stored in the chunk map
+
+        alt checksum matches
+            Note over CT: Chunk verified
+        else checksum mismatch, error or timeout from Worker 1
+            Note over CT: Mark Worker 1 replica as corrupt<br/>and schedule background repair
+            CT-)W2: async HTTP GET /chunks (network I/O)<br/>object_id, seq_no, chunk_id
+            activate W2
+            W2-)V2: async read (disk I/O): replica chunk
+            V2--)W2: chunk data
+            W2--)CT: chunk data
+            deactivate W2
+            Note over CT: Recompute checksum and verify again
+            break replica checksum also mismatches
+                CT->>S: abort connection (close / RST)
+                S-->>C: connection reset, client sees truncated body
+            end
+        end
+
+        CT->>S: async write of 1 verified chunk into the send buffer
+        S-->>C: TCP segments carrying chunk bytes
+        Note over C,S: Backpressure: a slow client shrinks its rwnd and the send buffer fills.<br/>The async write completes only when space frees up,<br/>so the controller fetches the next chunk only after that.
+    end
+
+    Note over C: All Content-Length bytes received.<br/>Client can verify the whole object against the ETag.

@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    participant CV as Controller Volume
+    participant CT as Controller
+    participant W as Worker
+    participant WV as Worker Volume
+
+    rect rgba(100, 149, 237, 0.12)
+    Note over CV,CT: Phase 1: Controller startup
+    CT-)CV: async read (disk I/O): object metadata
+    CV--)CT: object_id, size, ETag, chunk count, per-chunk checksums
+    Note over CT: Rebuild object table in memory<br/>Chunk location map starts EMPTY (locations are not persisted)<br/>Enter safe mode: no reads served, no re-replication triggered
+    end
+
+    rect rgba(60, 179, 113, 0.12)
+    Note over W,WV: Phase 2: Worker startup and registration
+    W-)WV: async read (disk I/O): local chunk metadata
+    WV--)W: object_id, seq_no, chunk_id, offset, length, checksum
+    W->>CT: register (ping): worker_id, address, capacity, free space
+    CT-->>W: ACK: registered, heartbeat interval
+    W->>CT: full chunk report: list of (object_id, seq_no, chunk_id, checksum)
+    Note over CT: For each reported chunk: add W to the replica set of chunk_id<br/>Unknown object_id → mark chunk as orphan<br/>Replica count below replication factor → queue for re-replication
+    CT-->>W: ACK chunk report (+ orphan chunk_ids to delete)
+    Note over CT: Leave safe mode once reported chunks cover<br/>a threshold of all known chunks (e.g. 99.9%)
+    end
+
+    rect rgba(255, 165, 0, 0.12)
+    Note over CT,W: Phase 3: Steady state and failure detection
+    loop every heartbeat interval (e.g. 3 s)
+        alt worker alive
+            CT->>W: ping
+            W-->>CT: ACK (+ load, free space)
+            Note over CT: Reset miss counter, update last_seen
+        else no ACK within ping timeout
+            CT-xW: ping (lost, no ACK)
+            Note over CT: Increment miss counter
+            break miss counter reaches N (e.g. 10 misses ≈ 30 s)
+                Note over CT: Mark worker DEAD<br/>Remove it from every replica set in the chunk map
+                Note over CT: Chunks now below replication factor → re-replication queue<br/>ref: Re-replication sequence (separate diagram)
+            end
+        end
+    end
+    end

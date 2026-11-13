@@ -1,0 +1,31 @@
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as TCP Socket Buffer<br/>(kernel receive buffer)
+    participant CT as Controller
+    participant W as Worker
+    participant V as Volume
+
+    C->>S: HTTP PUT /objects/:id<br/>headers (object metadata, Content-Length) + body bytes
+    Note over C,S: Backpressure via TCP flow control: as the receive buffer fills,<br/>the advertised window (rwnd) shrinks and the client's sends slow or stall
+
+    CT->>S: async non-blocking read (network I/O)
+    S-->>CT: HTTP headers + complete object metadata
+    Note over CT: Persist object metadata (state = UPLOADING)<br/>Allocate object_id
+
+    loop for each chunk until Content-Length bytes are consumed
+        CT->>S: async read of exactly 1 chunk (e.g. 8 MiB) into a bounded buffer
+        S-->>CT: chunk bytes (frees buffer space, rwnd reopens)
+        CT-)W: async HTTP PUT /chunks (network I/O)<br/>object_id, chunk_id, seq_no, length, checksum + chunk data
+        activate W
+        W-)V: async write (disk I/O): chunk data
+        V--)W: write completion (after fsync)
+        Note over W: Record chunk info locally<br/>chunk_id → volume, offset, length, checksum
+        W--)CT: 201 ACK: chunk_id, seq_no, location, checksum
+        deactivate W
+        Note over CT: Persist chunk map entry<br/>seq_no → worker, volume, offset<br/>Release chunk buffer, then read next chunk
+    end
+
+    Note over CT: All chunks ACKed → commit object manifest (state = COMPLETE)
+    CT->>S: write HTTP response
+    S-->>C: 201 Created (object_id, ETag)
