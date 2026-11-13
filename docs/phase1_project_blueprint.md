@@ -24,8 +24,6 @@ import (
     "context"
     "io"
 )
-
-type ChunkInfo struct {
     ID       string `json:"chunk_id"`
     Size     int64  `json:"size"`
     Checksum string `json:"checksum"` // SHA-256 hex digest
