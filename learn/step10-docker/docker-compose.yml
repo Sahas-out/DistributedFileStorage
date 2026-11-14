@@ -1,0 +1,24 @@
+# Run from the repo root:
+#   docker compose -f learn/step10-docker/docker-compose.yml up --build -d
+#
+# Same as the real docker-compose.yml, but with different names and port so
+# it can run next to the real worker1 (which uses 8081).
+services:
+  learn-worker:
+    build:
+      context: ../..                           # repo root, relative to this file
+      dockerfile: learn/step10-docker/Dockerfile # relative to the context
+    image: learn-worker:latest
+    container_name: learn-worker
+    environment:
+      WORKER_ID: learn-worker
+      PORT: "8080"
+      DATA_DIR: /data
+    ports:
+      - "8100:8080"     # host port 8100 -> container port 8080
+    volumes:
+      - learn-worker-data:/data
+    restart: unless-stopped
+
+volumes:
+  learn-worker-data:
